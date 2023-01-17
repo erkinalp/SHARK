@@ -124,11 +124,33 @@ p.add_argument(
 )
 
 p.add_argument(
+    "--output_img_format",
+    type=str,
+    default="png",
+    help="specify the format in which output image is save. Supported options: jpg / png",
+)
+
+p.add_argument(
     "--output_dir",
     type=str,
     default=None,
     help="Directory path to save the output images and json",
 )
+
+p.add_argument(
+    "--runs",
+    type=int,
+    default=1,
+    help="number of images to be generated with random seeds in single execution",
+)
+
+p.add_argument(
+    "--custom_model",
+    type=str,
+    default="",
+    help="Path to variants file - generated via .ckpt file. It may also contain the repo-id of hugging face.",
+)
+
 ##############################################################################
 ### IREE - Vulkan supported flags
 ##############################################################################

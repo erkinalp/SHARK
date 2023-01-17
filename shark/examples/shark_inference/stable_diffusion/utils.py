@@ -17,7 +17,21 @@ def _compile_module(shark_module, model_name, extra_args=[]):
             if "://" not in args.device
             else "-".join(args.device.split("://"))
         )
-        extended_name = "{}_{}".format(model_name, device)
+        # We need a better naming convention for the .vmfbs because despite
+        # using the custom model variant the .vmfb names remain the same and
+        # it'll always pick up the compiled .vmfb instead of compiling the
+        # custom model.
+        # So, currently, we add `custom_model_name` in the `extended_name` of
+        # .vmfb file.
+        # TODO: Have a better way of naming the vmfbs.
+        import re
+
+        custom_model_name = re.sub(r"\W+", "_", args.custom_model)
+        if custom_model_name != "" and custom_model_name[0] == "_":
+            custom_model_name = custom_model_name[1:]
+        extended_name = "{}_{}_{}".format(
+            model_name, device, custom_model_name
+        )
         vmfb_path = os.path.join(os.getcwd(), extended_name + ".vmfb")
         if args.load_vmfb and os.path.isfile(vmfb_path) and not args.save_vmfb:
             print(f"loading existing vmfb from: {vmfb_path}")
@@ -62,10 +76,13 @@ def get_shark_model(tank_url, model_name, extra_args=[]):
 
 
 # Converts the torch-module into a shark_module.
-def compile_through_fx(model, inputs, model_name, extra_args=[]):
+def compile_through_fx(
+    model, inputs, model_name, is_f16=False, f16_input_mask=None, extra_args=[]
+):
 
-    mlir_module, func_name = import_with_fx(model, inputs)
-
+    mlir_module, func_name = import_with_fx(
+        model, inputs, is_f16, f16_input_mask
+    )
     shark_module = SharkInference(
         mlir_module,
         device=args.device,
@@ -202,11 +219,10 @@ def set_init_device_flags():
 
     # Use tuned model in the case of stablediffusion/fp16 and cuda device sm_80
     if (
-        args.variant == "stablediffusion"
+        args.variant in ["stablediffusion", "anythingv3", "analogdiffusion"]
         and args.precision == "fp16"
         and "cuda" in args.device
         and get_cuda_sm_cc() == "sm_80"
-        and args.version == "v2_1base"
     ):
         args.use_tuned = True
 
@@ -242,3 +258,12 @@ def get_available_devices():
     available_devices.extend(cuda_devices)
     available_devices.append("cpu")
     return available_devices
+
+
+def disk_space_check(path, lim=20):
+    from shutil import disk_usage
+
+    du = disk_usage(path)
+    free = du.free / (1024 * 1024 * 1024)
+    if free <= lim:
+        print(f"[WARNING] Only {free:.2f}GB space available in {path}.")

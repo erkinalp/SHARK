@@ -245,8 +245,77 @@ class SharkImporter:
             )
 
 
+def get_f16_inputs(inputs, is_f16, f16_input_mask):
+
+    if is_f16 == False:
+        return inputs
+    if f16_input_mask == None:
+        return tuple([x.half() for x in inputs])
+
+    f16_masked_inputs = []
+    for i in range(len(inputs)):
+        if f16_input_mask[i]:
+            f16_masked_inputs.append(inputs[i].half())
+        else:
+            f16_masked_inputs.append(inputs[i])
+
+    return tuple(f16_masked_inputs)
+
+
+def transform_fx(fx_g):
+    import torch
+
+    kwargs_dict = {
+        "dtype": torch.float16,
+        "device": torch.device(type="cpu"),
+        "pin_memory": False,
+    }
+    for node in fx_g.graph.nodes:
+        if node.op == "call_function":
+            if node.target in [
+                torch.ops.aten.arange,
+                torch.ops.aten.empty,
+            ]:
+                node.kwargs = kwargs_dict
+            # Inputs and outputs of aten.var.mean should be upcasted to fp32.
+            if node.target in [torch.ops.aten.var_mean]:
+                with fx_g.graph.inserting_before(node):
+                    new_node = fx_g.graph.call_function(
+                        torch.ops.prims.convert_element_type,
+                        args=(node.args[0], torch.float32),
+                        kwargs={},
+                    )
+                    node.args = (new_node, node.args[1])
+            if node.name.startswith("getitem"):
+                with fx_g.graph.inserting_before(node):
+                    if node.args[0].target in [torch.ops.aten.var_mean]:
+                        new_node = fx_g.graph.call_function(
+                            torch.ops.aten._to_copy,
+                            args=(node,),
+                            kwargs={"dtype": torch.float16},
+                        )
+                        node.append(new_node)
+                        node.replace_all_uses_with(new_node)
+                        new_node.args = (node,)
+                        new_node.kwargs = {"dtype": torch.float16}
+            # aten.empty should be filled with zeros.
+            if node.target in [torch.ops.aten.empty]:
+                with fx_g.graph.inserting_after(node):
+                    new_node = fx_g.graph.call_function(
+                        torch.ops.aten.zero_,
+                        args=(node,),
+                    )
+                    node.append(new_node)
+                    node.replace_all_uses_with(new_node)
+                    new_node.args = (node,)
+
+    fx_g.graph.lint()
+
+
 # Applies fx conversion to the model and imports the mlir.
-def import_with_fx(model, inputs, debug=False):
+def import_with_fx(
+    model, inputs, is_f16=False, f16_input_mask=None, debug=False
+):
     import torch
     from torch.fx.experimental.proxy_tensor import make_fx
     from torch._decomp import get_decompositions
@@ -286,16 +355,23 @@ def import_with_fx(model, inputs, debug=False):
 
     strip_overloads(fx_g)
 
+    if is_f16:
+        fx_g = fx_g.half()
+        transform_fx(fx_g)
+        fx_g.recompile()
+
+    ts_graph = torch.jit.script(fx_g)
+    inputs = get_f16_inputs(inputs, is_f16, f16_input_mask)
+
     mlir_importer = SharkImporter(
-        fx_g,
+        ts_graph,
         inputs,
         frontend="torch",
     )
 
-    if debug:
+    if debug and not is_f16:
         (mlir_module, func_name), _, _ = mlir_importer.import_debug()
         return mlir_module, func_name
 
     mlir_module, func_name = mlir_importer.import_mlir()
-
     return mlir_module, func_name

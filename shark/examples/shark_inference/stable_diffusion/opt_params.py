@@ -72,6 +72,8 @@ def get_unet():
     bucket, model_name, iree_flags = get_params(
         bucket_key, model_key, "unet", is_tuned, args.precision
     )
+    if args.custom_model != "":
+        return get_unet_mlir(model_name, iree_flags)
     if not args.use_tuned and args.import_mlir:
         return get_unet_mlir(model_name, iree_flags)
     return get_shark_model(bucket, model_name, iree_flags)
@@ -91,6 +93,10 @@ def get_vae():
     bucket, model_name, iree_flags = get_params(
         bucket_key, model_key, "vae", is_tuned, args.precision
     )
+    if args.custom_model != "":
+        if args.use_base_vae:
+            return get_base_vae_mlir(model_name, iree_flags)
+        return get_vae_mlir(model_name, iree_flags)
     if not args.use_tuned and args.import_mlir:
         if args.use_base_vae:
             return get_base_vae_mlir(model_name, iree_flags)
@@ -104,6 +110,6 @@ def get_clip():
     bucket, model_name, iree_flags = get_params(
         bucket_key, model_key, "clip", "untuned", "fp32"
     )
-    if args.import_mlir:
+    if args.import_mlir or args.custom_model != "":
         return get_clip_mlir(model_name, iree_flags)
     return get_shark_model(bucket, model_name, iree_flags)
